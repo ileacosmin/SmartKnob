@@ -3,3 +3,18 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+# Ignore configuration file with secrets
+include/config.h
+
+# PlatformIO & VSCode specific
+.pio
+.vscode
+
+# Common files to ignore
+*.o
+*.a
+*.so
+*.lib
+*.exe
+*.dll
+

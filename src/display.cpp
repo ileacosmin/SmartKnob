@@ -31,72 +31,103 @@ void display_update() {
 
         float angleRad = motor_get_angle_radians();
         float angleDeg = angleRad * RAD_TO_DEG;
-        
-        const char* modeName = motor_get_mode_name();
+        float attractorRad = motor_get_attractor_angle_radians();
+        float attractorDeg = attractorRad * RAD_TO_DEG;
 
-        // Step 1: Clear the entire virtual screen
+        const char* modeName = motor_get_mode_name();
+        KnobMode currentMode = motor_get_mode();
+
         sprite.fillSprite(TFT_BLACK);
 
-        // Step 2: Draw background elements first
-        switch(motor_get_mode()) {
+        // --- Step 1: Draw background elements ---
+        switch(currentMode) {
             case MODE_LIGHT_BRIGHTNESS:
             case MODE_MEDIA_VOLUME: {
-                float displayAngleDeg = constrain(angleDeg, 0, VOLUME_MAX_ANGLE);
-                float percent = (displayAngleDeg / VOLUME_MAX_ANGLE) * 100.0;
+                float displayAngleDeg = constrain(angleDeg, 0, ANALOG_MODE_MAX_ANGLE);
+                float percent = (displayAngleDeg / ANALOG_MODE_MAX_ANGLE) * 100.0;
                 int bar_height = (percent / 100.0) * sprite.height();
-                
                 sprite.fillRect(0, sprite.height() - bar_height, sprite.width(), bar_height, TFT_ORANGE);
+
+                if (abs(angleRad - attractorRad) > 0.01) {
+                     sprite.drawArc(centerX, centerY, 85, 82, attractorDeg - 5, attractorDeg + 5, TFT_RED, TFT_BLACK, false);
+                }
                 break;
             }
             case MODE_FAN_SPEED: {
                 int radius = 100;
                 int num_detents = 360 / (int)FAN_DETENT_ANGLE;
                 for (int i = 0; i < num_detents; i++) {
-                    float attractorRad = i * FAN_DETENT_ANGLE * DEG_TO_RAD;
-                    int ax = centerX + cos(attractorRad) * radius;
-                    int ay = centerY - sin(attractorRad) * radius;
-                    sprite.fillCircle(ax, ay, 5, TFT_BLUE);
+                    float detentRad = i * FAN_DETENT_ANGLE * DEG_TO_RAD;
+                    sprite.fillCircle(centerX + cos(detentRad) * radius, centerY - sin(detentRad) * radius, 5, TFT_BLUE);
                 }
+                sprite.drawArc(centerX, centerY, 102, 99, attractorDeg - 5, attractorDeg + 5, TFT_CYAN, TFT_BLACK, false);
+                break;
+            }
+            case MODE_TEMPERATURE_CONTROL: {
+                 // Draw background arc
+                 sprite.drawArc(centerX, centerY, 105, 102, TEMP_MIN_ANGLE, TEMP_MAX_ANGLE, TFT_DARKGREY, TFT_BLACK, false);
+                 
+                 // Draw progress arc
+                 float constrained_angle = constrain(angleDeg, TEMP_MIN_ANGLE, TEMP_MAX_ANGLE);
+                 if (constrained_angle > TEMP_MIN_ANGLE) {
+                     sprite.drawArc(centerX, centerY, 105, 102, TEMP_MIN_ANGLE, constrained_angle, TFT_CYAN, TFT_BLACK, false);
+                 }
+
+                 // Draw end-stop indicator arc
+                 if (abs(angleRad - attractorRad) > 0.01 && (angleRad < (TEMP_MIN_ANGLE * DEG_TO_RAD) || angleRad > (TEMP_MAX_ANGLE * DEG_TO_RAD) )) {
+                     sprite.drawArc(centerX, centerY, 105, 102, attractorDeg - 5, attractorDeg + 5, TFT_RED, TFT_BLACK, false);
+                 }
                 break;
             }
         }
 
-        // Step 3: Draw all text elements on top of the background
-        // Draw the mode name at the top
+        // --- Step 2: Draw all text elements ---
         sprite.setTextDatum(TC_DATUM);
         sprite.setTextSize(2);
         sprite.setTextColor(TFT_WHITE);
         sprite.drawString(modeName, centerX, 10);
 
-        // Draw the main value in the center
         sprite.setTextDatum(MC_DATUM); 
         sprite.setTextSize(3);
         
-        switch(motor_get_mode()) {
+        switch(currentMode) {
             case MODE_LIGHT_BRIGHTNESS:
             case MODE_MEDIA_VOLUME: {
-                float displayAngleDeg = constrain(angleDeg, 0, VOLUME_MAX_ANGLE);
-                float percent = (displayAngleDeg / VOLUME_MAX_ANGLE) * 100.0;
+                float displayAngleDeg = constrain(angleDeg, 0, ANALOG_MODE_MAX_ANGLE);
+                float percent = (displayAngleDeg / ANALOG_MODE_MAX_ANGLE) * 100.0;
                 sprite.drawString(String((int)percent), centerX, centerY);
                 break;
             }
             case MODE_FAN_SPEED: {
-                float constrainedAngle = constrain(angleDeg, 0, 270);
+                float constrainedAngle = constrain(angleDeg, 0, 359);
                 int speed_level = round(constrainedAngle / FAN_DETENT_ANGLE);
                 sprite.setTextColor(TFT_GREEN);
                 sprite.drawString(String(speed_level), centerX, centerY);
                 break;
             }
+            case MODE_TEMPERATURE_CONTROL: {
+                 float range_degrees = TEMP_MAX_ANGLE - TEMP_MIN_ANGLE;
+                 float range_celsius = TEMP_CELSIUS_MAX - TEMP_CELSIUS_MIN;
+                 float temp = TEMP_CELSIUS_MIN + ((angleDeg - TEMP_MIN_ANGLE) * range_celsius / range_degrees);
+
+                 // **NEW:** Round the calculated temperature to the nearest 0.5
+                 float rounded_temp = round(temp * 2.0) / 2.0;
+
+                 rounded_temp = constrain(rounded_temp, TEMP_CELSIUS_MIN, TEMP_CELSIUS_MAX);
+                 sprite.setTextColor(TFT_CYAN);
+                 sprite.drawString(String(rounded_temp, 1) + " C", centerX, centerY);
+                 break;
+            }
         }
 
-        // Step 4: Draw the needle on top of everything
-        int radius = 100;
-        int needleX = centerX + cos(angleRad) * radius;
-        int needleY = centerY - sin(angleRad) * radius;
-        sprite.drawLine(centerX, centerY, needleX, needleY, TFT_RED);
-        sprite.fillCircle(needleX, needleY, 3, TFT_RED);
+        // --- Step 3: Draw the needle (unless in Temperature mode) ---
+        if (currentMode != MODE_TEMPERATURE_CONTROL) {
+            int radius = 100;
+            sprite.drawLine(centerX, centerY, centerX + cos(angleRad) * radius, centerY - sin(angleRad) * radius, TFT_RED);
+            sprite.fillCircle(centerX + cos(angleRad) * radius, centerY - sin(angleRad) * radius, 3, TFT_RED);
+        }
 
-        // Step 5: Push the final, completed image to the screen
+        // --- Step 4: Push to screen ---
         sprite.pushSprite(0, 0);
     }
 }

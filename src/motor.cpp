@@ -27,7 +27,7 @@ void motor_init() {
     SPI.begin();
     sensor.init();
     motor.linkSensor(&sensor);
-    motor.sensor_direction = Direction::CCW;
+    motor.sensor_direction = Direction::CW; // Changed from CCW to CW
     
     driver.voltage_power_supply = POWER_SUPPLY_VOLTAGE;
     driver.init();

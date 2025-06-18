@@ -47,7 +47,7 @@ void motor_update() {
 
     if (is_transitioning) {
         voltage = haptic_pid(transition_target_angle - motor.shaft_angle);
-        if (abs(transition_target_angle - motor.shaft_angle) < 0.05) {
+        if (abs(transition_target_angle - motor.shaft_angle) < 0.025) {
             is_transitioning = false;
             motor_set_mode(current_mode, true);
         }

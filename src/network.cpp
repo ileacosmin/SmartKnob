@@ -4,10 +4,12 @@
 #include "config.h"
 #include "network.h"
 #include "motor.h"
+#include "display.h" // Include display.h to get color payload
 
 WiFiClientSecure espClient;
 PubSubClient client(espClient);
 unsigned long lastMqttUpdate = 0;
+int last_published_color_index = -1; // Track last published color to avoid spam
 
 void reconnect_mqtt() {
     while (!client.connected()) {
@@ -50,6 +52,12 @@ void network_publish_mode() {
     }
 }
 
+void network_publish_media_control(const char* action) {
+    if (client.connected()) {
+        client.publish(MQTT_TOPIC_MEDIA_CONTROL, action);
+    }
+}
+
 void network_update() {
     if (!client.connected()) {
         reconnect_mqtt();
@@ -60,7 +68,7 @@ void network_update() {
         lastMqttUpdate = millis();
         
         float angleDeg = motor_get_angle_radians() * RAD_TO_DEG;
-        char payload[10];
+        char payload[20]; // Increased size for color payload
 
         if (client.connected()) {
             switch(motor_get_mode()) {
@@ -86,21 +94,31 @@ void network_update() {
                      break;
                 }
                 case MODE_TEMPERATURE_CONTROL: {
-                     // **FIXED:** Replaced map() with the precise floating-point calculation
-                     // to ensure values with .5 are sent correctly.
                      float range_degrees = TEMP_MAX_ANGLE - TEMP_MIN_ANGLE;
                      float range_celsius = TEMP_CELSIUS_MAX - TEMP_CELSIUS_MIN;
                      float temp = TEMP_CELSIUS_MIN + ((angleDeg - TEMP_MIN_ANGLE) * range_celsius / range_degrees);
-
-                     // Round to the nearest 0.5 to match the display and haptics
                      float rounded_temp = round(temp * 2.0) / 2.0;
                      rounded_temp = constrain(rounded_temp, TEMP_CELSIUS_MIN, TEMP_CELSIUS_MAX);
-                     
-                     // Format the float to a string with one decimal place
                      dtostrf(rounded_temp, 4, 1, payload);
                      client.publish(MQTT_TOPIC_TEMPERATURE, payload);
                      break;
                 }
+                // --- NEW MQTT PUBLISH LOGIC for Color Palette ---
+                case MODE_LIGHT_COLOR: {
+                    int current_index = motor_get_color_index();
+                    // Only publish if the color has changed
+                    if (current_index != last_published_color_index) {
+                        const char* hs_payload = display_get_color_payload(current_index);
+                        client.publish(MQTT_TOPIC_LIGHT_COLOR_HS, hs_payload);
+                        last_published_color_index = current_index;
+                        Serial.print("Published Color: ");
+                        Serial.println(hs_payload);
+                    }
+                    break;
+                }
+                case MODE_MEDIA_CONTROL:
+                    // Publishing is handled directly in motor.cpp
+                    break;
             }
         }
     }

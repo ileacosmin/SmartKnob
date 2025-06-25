@@ -57,3 +57,11 @@ The integration requires two main parts in the configuration:
 2.  **`automations.yaml`**: Contains the logic that translates the knob's state changes into actions (e.g., when `sensor.smartknob_brightness_value` changes, call the `light.turn_on` service).
 
 This setup allows for a robust and decoupled architecture where the knob and Home Assistant communicate efficiently.
+
+## Acknowledgements
+
+This project is heavily inspired by and based on the original open-source SmartKnob created by Scott Bezek. All credit for the foundational hardware design, firmware concepts, and the initial inspiration goes to him.
+
+* **Original Project:** [scottbez1/smartknob on GitHub](https://github.com/scottbez1/smartknob)
+
+---

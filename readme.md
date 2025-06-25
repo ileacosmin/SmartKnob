@@ -12,7 +12,9 @@ This project is a custom-built smart knob designed to provide a tactile and intu
 ## Implemented Control Modes
 
 The knob currently supports the following six modes, which can be cycled through by pressing the knob:
+The complete configuration for Home Assistant can be found in its dedicated repository:
 
+Home Assistant Configuration Repository: ileacosmin/SmartKnob-homeassistant-cfg
 ### 1. Light Brightness
 -   **Function:** Controls the brightness of a light.
 -   **Haptics:** Smooth, free-spinning feel between 0% and 100% with hard "walls" at both ends.
@@ -45,7 +47,11 @@ The knob currently supports the following six modes, which can be cycled through
 
 ## Home Assistant Setup
 
-The knob communicates with Home Assistant via an MQTT broker. The integration requires two main parts in the Home Assistant configuration:
+The knob communicates with Home Assistant via an MQTT broker. The complete configuration for Home Assistant can be found in its dedicated repository:
+
+* **Home Assistant Configuration Repository:** [ileacosmin/SmartKnob-homeassistant-cfg](https://github.com/ileacosmin/SmartKnob-homeassistant-cfg)
+
+The integration requires two main parts in the configuration:
 
 1.  **`configuration.yaml`**: Defines the MQTT sensors that listen for state updates from the knob (e.g., the current mode, brightness value, color hue, etc.).
 2.  **`automations.yaml`**: Contains the logic that translates the knob's state changes into actions (e.g., when `sensor.smartknob_brightness_value` changes, call the `light.turn_on` service).

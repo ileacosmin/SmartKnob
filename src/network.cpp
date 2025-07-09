@@ -4,12 +4,12 @@
 #include "config.h"
 #include "network.h"
 #include "motor.h"
-#include "display.h" // Include display.h to get color payload
+#include "display.h"
 
 WiFiClientSecure espClient;
 PubSubClient client(espClient);
 unsigned long lastMqttUpdate = 0;
-int last_published_color_index = -1; // Track last published color to avoid spam
+int last_published_color_index = -1;
 
 void reconnect_mqtt() {
     while (!client.connected()) {
@@ -34,7 +34,7 @@ void network_init() {
         Serial.print(".");
     }
     Serial.println("\nWiFi connected.");
-    
+
     espClient.setInsecure();
     client.setServer(MQTT_SERVER, MQTT_PORT);
     Serial.println("Networking Initialized.");
@@ -43,18 +43,24 @@ void network_init() {
 void network_publish_button_press() {
     if (client.connected()) {
         client.publish(MQTT_TOPIC_BUTTON_PRESS, "PRESS");
+        Serial.println("Published Button Press to topic: " MQTT_TOPIC_BUTTON_PRESS);
     }
 }
 
 void network_publish_mode() {
     if (client.connected()) {
-        client.publish(MQTT_TOPIC_MODE_STATE, motor_get_mode_name());
+        const char* mode_name = motor_get_mode_name();
+        client.publish(MQTT_TOPIC_MODE_STATE, mode_name);
+        Serial.print("Published Mode: ");
+        Serial.println(mode_name);
     }
 }
 
 void network_publish_media_control(const char* action) {
     if (client.connected()) {
         client.publish(MQTT_TOPIC_MEDIA_CONTROL, action);
+        Serial.print("Published Media Control: ");
+        Serial.println(action);
     }
 }
 
@@ -66,9 +72,9 @@ void network_update() {
 
     if (millis() - lastMqttUpdate > MQTT_UPDATE_MS) {
         lastMqttUpdate = millis();
-        
+
         float angleDeg = motor_get_angle_radians() * RAD_TO_DEG;
-        char payload[20]; // Increased size for color payload
+        char payload[20];
 
         if (client.connected()) {
             switch(motor_get_mode()) {
@@ -77,6 +83,7 @@ void network_update() {
                     int brightness = map(displayAngleDeg, 0, ANALOG_MODE_MAX_ANGLE, 0, 255);
                     sprintf(payload, "%d", brightness);
                     client.publish(MQTT_TOPIC_LIGHT_BRIGHTNESS, payload);
+                    Serial.print("Published Brightness: "); Serial.println(payload);
                     break;
                 }
                 case MODE_MEDIA_VOLUME: {
@@ -84,6 +91,7 @@ void network_update() {
                     int volume_percent = (displayAngleDeg / ANALOG_MODE_MAX_ANGLE) * 100;
                     sprintf(payload, "%d", volume_percent);
                     client.publish(MQTT_TOPIC_MEDIA_VOLUME, payload);
+                    Serial.print("Published Volume: "); Serial.println(payload);
                     break;
                 }
                 case MODE_FAN_SPEED: {
@@ -91,6 +99,7 @@ void network_update() {
                      int speed_level = round(constrainedAngle / FAN_DETENT_ANGLE);
                      sprintf(payload, "%d", speed_level);
                      client.publish(MQTT_TOPIC_FAN_SPEED, payload);
+                     Serial.print("Published Fan Speed: "); Serial.println(payload);
                      break;
                 }
                 case MODE_TEMPERATURE_CONTROL: {
@@ -101,23 +110,21 @@ void network_update() {
                      rounded_temp = constrain(rounded_temp, TEMP_CELSIUS_MIN, TEMP_CELSIUS_MAX);
                      dtostrf(rounded_temp, 4, 1, payload);
                      client.publish(MQTT_TOPIC_TEMPERATURE, payload);
+                     Serial.print("Published Temperature: "); Serial.println(payload);
                      break;
                 }
-                // --- NEW MQTT PUBLISH LOGIC for Color Palette ---
                 case MODE_LIGHT_COLOR: {
                     int current_index = motor_get_color_index();
-                    // Only publish if the color has changed
                     if (current_index != last_published_color_index) {
                         const char* hs_payload = display_get_color_payload(current_index);
                         client.publish(MQTT_TOPIC_LIGHT_COLOR_HS, hs_payload);
+                        Serial.print("Published Color (H,S): "); Serial.println(hs_payload);
                         last_published_color_index = current_index;
-                        Serial.print("Published Color: ");
-                        Serial.println(hs_payload);
                     }
                     break;
                 }
                 case MODE_MEDIA_CONTROL:
-                    // Publishing is handled directly in motor.cpp
+                    // Publishing is handled directly in motor.cpp via network_publish_media_control()
                     break;
             }
         }

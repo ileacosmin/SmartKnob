@@ -2,213 +2,264 @@
 #include <SPI.h>
 #include "config.h"
 #include "motor.h"
-#include "network.h" 
+#include "network.h"
 
-// --- Motor Objects ---
+// ─────────────────────────────────────────────────────────────────────────────
+//  Motor objects and global PID
+// ─────────────────────────────────────────────────────────────────────────────
 BLDCMotor motor = BLDCMotor(MOTOR_POLE_PAIRS);
 BLDCDriver3PWM driver = BLDCDriver3PWM(MOTOR_A, MOTOR_B, MOTOR_C, MOTOR_EN);
 MagneticSensorSPI sensor = MagneticSensorSPI(SENSOR_CS, 14, 0x3FFF);
 PIDController haptic_pid = PIDController(0, 0, 0, 100000, POWER_SUPPLY_VOLTAGE);
 
-// --- State Management Variables ---
+// ─────────────────────────────────────────────────────────────────────────────
+//  Mode‑specific limits helper
+// ─────────────────────────────────────────────────────────────────────────────
+struct ModeRange {
+    bool bounded;      // true  → we must stay within [min,max]
+    float min_deg;     // degrees
+    float max_deg;     // degrees
+};
+
+static const ModeRange mode_ranges[NUM_MODES] = {
+    /* MODE_LIGHT_BRIGHTNESS  */ {true,  0,                ANALOG_MODE_MAX_ANGLE},
+    /* MODE_MEDIA_VOLUME      */ {true,  0,                ANALOG_MODE_MAX_ANGLE},
+    /* MODE_FAN_SPEED         */ {false, 0,                0},              // 360° continuous
+    /* MODE_TEMPERATURE_CTRL  */ {true,  TEMP_MIN_ANGLE,   TEMP_MAX_ANGLE},
+    /* MODE_MEDIA_CONTROL     */ {true,  TRACK_MODE_MIN_ANGLE, TRACK_MODE_MAX_ANGLE},
+    /* MODE_LIGHT_COLOR       */ {false, 0,                0}               // 360° spinner
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  State
+// ─────────────────────────────────────────────────────────────────────────────
 KnobMode current_mode = MODE_LIGHT_BRIGHTNESS;
-const char* mode_names[] = {"Light Brightness", "Media Volume", "Fan Speed", "Temperature", "Media Control", "Light Color"};
-float mode_angles[NUM_MODES] = {0.0f};
-bool is_transitioning = false;
-float transition_target_angle = 0.0f;
-float current_attractor_angle = 0.0f;
+const char *mode_names[] = {"Brightness", "Volume", "Fan Speed", "Temp", "Media", "Color"};
 
-int8_t last_media_action = 0;
-int current_color_index = 0;
+static float modeMemory[NUM_MODES] = {0};     // last *virtual* angle per mode (radians)
+static float modeOffset[NUM_MODES] = {0};     // physical → virtual shift for each mode
+static float currentVirtualAngle   = 0;       // live virtual angle exposed to the rest of the firmware
+static float current_attractor_angle = 0;     // haptic target (virtual space)
 
-// --- Helper Functions ---
-float findDetent(float angle, float detent_width) {
-    return round(angle / detent_width) * detent_width;
+int8_t last_media_action  = 0;  // –1 = prev, 0 = none, 1 = next
+int   current_color_index = 0;  // 0‥15 (palette index)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Utilities
+// ─────────────────────────────────────────────────────────────────────────────
+static float deg2rad(float d) { return d * DEG_TO_RAD; }
+static float rad2deg(float r) { return r * RAD_TO_DEG; }
+
+static float findDetent(float angle, float detent_width) {
+    return roundf(angle / detent_width) * detent_width;
 }
 
-// --- Public Functions ---
+// Clamp a value (in *radians*) to the legal range for a mode.
+static float clamp_to_mode(KnobMode m, float rad) {
+    const ModeRange &rng = mode_ranges[m];
+    if (!rng.bounded) return rad;  // unbounded – nothing to do
+
+    float min_r = deg2rad(rng.min_deg);
+    float max_r = deg2rad(rng.max_deg);
+    if (rad < min_r) return min_r;
+    if (rad > max_r) return max_r;
+    return rad;
+}
+
+// Provide a sensible initial memory if we are entering a mode for the first time
+static float default_memory_for_mode(KnobMode m, float physical_rad) {
+    const ModeRange &rng = mode_ranges[m];
+    if (!rng.bounded) {
+        // Unbounded => stay where we are (no snapping)
+        return physical_rad;
+    }
+    // Centre of the allowed sector
+    return deg2rad((rng.min_deg + rng.max_deg) * 0.5f);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Public API
+// ─────────────────────────────────────────────────────────────────────────────
 void motor_init() {
     SPI.begin();
     sensor.init();
+
     motor.linkSensor(&sensor);
-    motor.sensor_direction = Direction::CW; 
-    
+    motor.sensor_direction = Direction::CW;
+
     driver.voltage_power_supply = POWER_SUPPLY_VOLTAGE;
     driver.init();
     motor.linkDriver(&driver);
+
     motor.foc_modulation = FOCModulationType::SpaceVectorPWM;
-    motor.controller = MotionControlType::torque;
+    motor.controller     = MotionControlType::torque;
+
     motor.init();
     motor.initFOC();
-    motor_set_mode(MODE_LIGHT_BRIGHTNESS, true); 
-    Serial.println("Motor Initialized.");
+
+    // Fill memory defaults so the first switch into any mode is quiet
+    float physical_now = motor.shaft_angle;
+    for (int i = 0; i < NUM_MODES; ++i) {
+        modeMemory[i] = default_memory_for_mode((KnobMode)i, physical_now);
+    }
+
+    motor_set_mode(MODE_LIGHT_BRIGHTNESS, true);
+    Serial.println("Motor initialised.");
 }
 
 void motor_update() {
     motor.loopFOC();
-    float voltage = 0;
-    current_attractor_angle = motor.shaft_angle;
 
-    if (is_transitioning) {
-        voltage = haptic_pid(transition_target_angle - motor.shaft_angle);
-        if (abs(transition_target_angle - motor.shaft_angle) < 0.025) {
-            is_transitioning = false;
-            motor_set_mode(current_mode, true);
-        }
-    } else {
-        float angle_rad = motor.shaft_angle;
-        float angle_deg = angle_rad * RAD_TO_DEG;
+    // ── 1) physical → virtual conversion ────────────────────────────────────
+    float physical = motor.shaft_angle;
+    currentVirtualAngle = physical + modeOffset[current_mode];
 
-        switch (current_mode) {
-            case MODE_LIGHT_BRIGHTNESS:
-            case MODE_MEDIA_VOLUME: {
-                if (angle_deg > ANALOG_MODE_MAX_ANGLE) {
-                    current_attractor_angle = ANALOG_MODE_MAX_ANGLE * DEG_TO_RAD;
-                    voltage = haptic_pid(current_attractor_angle - angle_rad);
-                } else if (angle_deg < 0) {
-                     current_attractor_angle = 0;
-                     voltage = haptic_pid(current_attractor_angle - angle_rad);
-                } else {
-                    voltage = -HAPTIC_KD_DAMPING * motor.shaft_velocity;
-                }
-                break;
-            }
-            case MODE_FAN_SPEED: {
-                current_attractor_angle = findDetent(angle_rad, FAN_DETENT_ANGLE * DEG_TO_RAD);
+    float angle_rad = currentVirtualAngle;
+    float angle_deg = rad2deg(angle_rad);
+
+    float voltage = 0.0f;
+
+    // ── 2) per‑mode haptic behaviour ────────────────────────────────────────
+    switch (current_mode) {
+        // ► Analog end‑stops 0…180°
+        case MODE_LIGHT_BRIGHTNESS:
+        case MODE_MEDIA_VOLUME: {
+            if (angle_deg > ANALOG_MODE_MAX_ANGLE) {
+                current_attractor_angle = deg2rad(ANALOG_MODE_MAX_ANGLE);
                 voltage = haptic_pid(current_attractor_angle - angle_rad);
-                break;
-            }
-            case MODE_TEMPERATURE_CONTROL: {
-                 float min_rad = TEMP_MIN_ANGLE * DEG_TO_RAD;
-                 float max_rad = TEMP_MAX_ANGLE * DEG_TO_RAD;
-
-                 if (angle_rad > max_rad) {
-                    current_attractor_angle = max_rad;
-                    voltage = haptic_pid(current_attractor_angle - angle_rad);
-                 } else if (angle_rad < min_rad) {
-                    current_attractor_angle = min_rad;
-                    voltage = haptic_pid(current_attractor_angle - angle_rad);
-                 } else {
-                    float relative_angle = angle_rad - min_rad;
-                    float detent_width_rad = TEMP_DETENT_ANGLE * DEG_TO_RAD;
-                    current_attractor_angle = findDetent(relative_angle, detent_width_rad) + min_rad;
-                    voltage = haptic_pid(current_attractor_angle - angle_rad);
-                 }
-                 break;
-            }
-            case MODE_MEDIA_CONTROL: {
-                float min_rad = TRACK_MODE_MIN_ANGLE * DEG_TO_RAD;
-                float max_rad = TRACK_MODE_MAX_ANGLE * DEG_TO_RAD;
-                
-                if (angle_rad > max_rad) {
-                    current_attractor_angle = max_rad;
-                    voltage = haptic_pid(current_attractor_angle - angle_rad);
-                    if (last_media_action != 1) {
-                        network_publish_media_control("NEXT");
-                        last_media_action = 1;
-                    }
-                } else if (angle_rad < min_rad) {
-                    current_attractor_angle = min_rad;
-                    voltage = haptic_pid(current_attractor_angle - angle_rad);
-                    if (last_media_action != -1) {
-                        network_publish_media_control("PREVIOUS");
-                        last_media_action = -1;
-                    }
-                } else {
-                    voltage = -HAPTIC_KD_DAMPING * motor.shaft_velocity;
-                    last_media_action = 0;
-                }
-                break;
-            }
-            // --- FIX: Restored 360-degree spinner feel for Color Mode ---
-            case MODE_LIGHT_COLOR: {
-                // Wrap angle to be always positive for 360 degree control
-                float wrapped_angle = fmod(angle_rad, 2 * PI);
-                if (wrapped_angle < 0) {
-                    wrapped_angle += 2 * PI;
-                }
-                current_attractor_angle = findDetent(wrapped_angle, COLOR_MODE_DETENT_ANGLE * DEG_TO_RAD);
-                voltage = haptic_pid(current_attractor_angle - wrapped_angle);
-
-                // This part keeps it compatible with your color grid display
-                // It maps the 36 spinner positions to the 16 grid colors
-                int spinner_position = round(current_attractor_angle / (COLOR_MODE_DETENT_ANGLE * DEG_TO_RAD));
-                current_color_index = spinner_position % 16;
-                break;
-            }
-        }
-    }
-    motor.move(voltage);
-}
-
-// This function still exists so your other files will compile
-int motor_get_color_index(){
-    return current_color_index;
-}
-
-void motor_set_mode(KnobMode new_mode, bool force_update) {
-    if ((!is_transitioning && new_mode != current_mode) || force_update) {
-        if (!force_update) {
-            mode_angles[current_mode] = motor.shaft_angle;
-            
-            if (new_mode == MODE_TEMPERATURE_CONTROL) {
-                float target_candidate = mode_angles[new_mode];
-                float min_rad = TEMP_MIN_ANGLE * DEG_TO_RAD;
-                float max_rad = TEMP_MAX_ANGLE * DEG_TO_RAD;
-                if (target_candidate < min_rad || target_candidate > max_rad) {
-                    transition_target_angle = min_rad;
-                } else {
-                    transition_target_angle = target_candidate;
-                }
-            } else if (new_mode == MODE_MEDIA_CONTROL) {
-                transition_target_angle = (TRACK_MODE_MIN_ANGLE + TRACK_MODE_MAX_ANGLE) / 2.0f * DEG_TO_RAD;
+            } else if (angle_deg < 0) {
+                current_attractor_angle = 0;
+                voltage = haptic_pid(current_attractor_angle - angle_rad);
             } else {
-                transition_target_angle = mode_angles[new_mode];
+                voltage = -HAPTIC_KD_DAMPING * motor.shaft_velocity;
             }
-            
-            is_transitioning = true;
-        }
-        
-        current_mode = new_mode;
-        Serial.print("Mode set to: ");
-        Serial.println(mode_names[current_mode]);
-
-        // --- FIX: Restored simple & crisp PID settings ---
-        switch (current_mode) {
-            case MODE_FAN_SPEED:
-            case MODE_TEMPERATURE_CONTROL:
-            case MODE_LIGHT_COLOR:
-                // Use crisp detents for these modes
-                haptic_pid.P = HAPTIC_KP_DETENT;
-                haptic_pid.D = 0; // Set D to 0 for a sharper "click"
-                break;
-            case MODE_LIGHT_BRIGHTNESS:
-            case MODE_MEDIA_VOLUME:
-            case MODE_MEDIA_CONTROL:
-                // Use end-stops for these modes
-                haptic_pid.P = HAPTIC_KP_ENDSTOP;
-                haptic_pid.D = 0; 
-                break;
+            break;
         }
 
-        if (is_transitioning && !force_update) {
-            haptic_pid.P = 5; 
+        // ► 4‑speed fan detents every 90° (0…359° valid)
+        case MODE_FAN_SPEED: {
+            current_attractor_angle = findDetent(angle_rad, deg2rad(FAN_DETENT_ANGLE));
+            voltage = haptic_pid(current_attractor_angle - angle_rad);
+            break;
         }
+
+        // ► Temperature arc 45…315° with 9° (≈0.5 °C) detents
+        case MODE_TEMPERATURE_CONTROL: {
+            float min_r = deg2rad(TEMP_MIN_ANGLE);
+            float max_r = deg2rad(TEMP_MAX_ANGLE);
+
+            if (angle_rad > max_r) {
+                current_attractor_angle = max_r;
+                voltage = haptic_pid(current_attractor_angle - angle_rad);
+            } else if (angle_rad < min_r) {
+                current_attractor_angle = min_r;
+                voltage = haptic_pid(current_attractor_angle - angle_rad);
+            } else {
+                float relative = angle_rad - min_r;
+                float detent_w = deg2rad(TEMP_DETENT_ANGLE);
+                current_attractor_angle = findDetent(relative, detent_w) + min_r;
+                voltage = haptic_pid(current_attractor_angle - angle_rad);
+            }
+            break;
+        }
+
+        // ► Media track paddle (spring between 70°…110°)
+        case MODE_MEDIA_CONTROL: {
+            float min_r = deg2rad(TRACK_MODE_MIN_ANGLE);
+            float max_r = deg2rad(TRACK_MODE_MAX_ANGLE);
+
+            if (angle_rad > max_r) {
+                current_attractor_angle = max_r;
+                voltage = haptic_pid(current_attractor_angle - angle_rad);
+                if (last_media_action != 1) {
+                    network_publish_media_control("NEXT");
+                    last_media_action = 1;
+                }
+            } else if (angle_rad < min_r) {
+                current_attractor_angle = min_r;
+                voltage = haptic_pid(current_attractor_angle - angle_rad);
+                if (last_media_action != -1) {
+                    network_publish_media_control("PREVIOUS");
+                    last_media_action = -1;
+                }
+            } else {
+                voltage = -HAPTIC_KD_DAMPING * motor.shaft_velocity;
+                last_media_action = 0;
+            }
+            break;
+        }
+
+        // ► 360° colour spinner (20° detents)
+        case MODE_LIGHT_COLOR: {
+            float wrapped = fmodf(angle_rad, 2 * PI);
+            if (wrapped < 0) wrapped += 2 * PI;
+
+            current_attractor_angle = findDetent(wrapped, deg2rad(COLOR_MODE_DETENT_ANGLE));
+            voltage = haptic_pid(current_attractor_angle - wrapped);
+
+            int spinner_pos = roundf(current_attractor_angle / deg2rad(COLOR_MODE_DETENT_ANGLE));
+            current_color_index = spinner_pos % COLOR_PALETTE_SIZE;
+            break;
+        }
+    }
+
+    // ── 3) drive motor & remember position ──────────────────────────────────
+    motor.move(voltage);
+    modeMemory[current_mode] = currentVirtualAngle; // update memory live
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Mode switching (no physical movement!)
+// ─────────────────────────────────────────────────────────────────────────────
+void motor_set_mode(KnobMode new_mode, bool force) {
+    if (!force && new_mode == current_mode) return;
+
+    // 1) snapshot the angle we’re leaving (virtual space)
+    modeMemory[current_mode] = currentVirtualAngle;
+
+    // 2) ensure stored value for the target mode is legal
+    float stored   = modeMemory[new_mode];
+    float physical = motor.shaft_angle;
+
+    // If we have never visited this mode, stored == 0 → pick a sensible default
+    if (stored == 0.0f && new_mode != MODE_LIGHT_BRIGHTNESS) {
+        stored = default_memory_for_mode(new_mode, physical);
+    }
+
+    stored = clamp_to_mode(new_mode, stored);
+    modeMemory[new_mode] = stored;
+
+    // 3) choose new offset so that virtual angle == stored (no torque)
+    modeOffset[new_mode] = stored - physical;
+
+    current_mode = new_mode;
+
+    Serial.print("Mode set to: ");
+    Serial.println(mode_names[current_mode]);
+
+    // 4) quick PID profile switch
+    switch (current_mode) {
+        case MODE_FAN_SPEED:
+        case MODE_TEMPERATURE_CONTROL:
+        case MODE_LIGHT_COLOR:
+            haptic_pid.P = HAPTIC_KP_DETENT;
+            haptic_pid.D = 0;
+            break;
+
+        case MODE_LIGHT_BRIGHTNESS:
+        case MODE_MEDIA_VOLUME:
+        case MODE_MEDIA_CONTROL:
+            haptic_pid.P = HAPTIC_KP_ENDSTOP;
+            haptic_pid.D = 0;
+            break;
     }
 }
 
-KnobMode motor_get_mode() {
-    return current_mode;
-}
-
-float motor_get_angle_radians() {
-    return motor.shaft_angle;
-}
-
-float motor_get_attractor_angle_radians() {
-    return current_attractor_angle;
-}
-
-const char* motor_get_mode_name() {
-    return mode_names[current_mode];
-}
+// ─────────────────────────────────────────────────────────────────────────────
+//  Simple getters (all in virtual space)
+// ─────────────────────────────────────────────────────────────────────────────
+KnobMode motor_get_mode()             { return current_mode; }
+float    motor_get_angle_radians()    { return currentVirtualAngle; }
+float    motor_get_attractor_angle_radians() { return current_attractor_angle; }
+const char *motor_get_mode_name()     { return mode_names[current_mode]; }
+int      motor_get_color_index()      { return current_color_index; }

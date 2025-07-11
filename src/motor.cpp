@@ -78,7 +78,7 @@ static float default_memory_for_mode(KnobMode m, float physical_rad) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Public API
+//  Setup and Loop
 // ─────────────────────────────────────────────────────────────────────────────
 void motor_init() {
     SPI.begin();
@@ -96,6 +96,13 @@ void motor_init() {
 
     motor.init();
     motor.initFOC();
+    /* ───────Low pass Filter on the velocity loop─────── */
+    //motor.LPF_velocity.Tf = 0.001f;   // 5 ms time constant (~200 Hz )     
+    /* ────────────────────────────────────────────────── */
+
+    /* ───────Low pass Filter on the angle loop─────── */
+    //motor.LPF_angle.Tf = 0.005f;   // 5 ms time constant (~200 Hz )     
+    /* ────────────────────────────────────────────────── */
 
     // Fill memory defaults so the first switch into any mode is quiet
     float physical_now = motor.shaft_angle;
@@ -240,23 +247,39 @@ void motor_set_mode(KnobMode new_mode, bool force) {
     // 4) quick PID profile switch
     switch (current_mode) {
         case MODE_FAN_SPEED:
+            haptic_pid.P = HAPTIC_KP_FAN;
+            haptic_pid.D = 0;
+            break;
         case MODE_TEMPERATURE_CONTROL:
+            haptic_pid.P = HAPTIC_KP_TEMP;
+            haptic_pid.D = 0;
+            break;
         case MODE_LIGHT_COLOR:
-            haptic_pid.P = HAPTIC_KP_DETENT;
+            haptic_pid.P = HAPTIC_KP_COLOR;
             haptic_pid.D = 0;
             break;
 
         case MODE_LIGHT_BRIGHTNESS:
+            haptic_pid.P = HAPTIC_KP_BRIGHTNESS;
+            haptic_pid.D = 0;
+            break;
         case MODE_MEDIA_VOLUME:
+            haptic_pid.P = HAPTIC_KP_VOLUME;
+            haptic_pid.D = 0;
+            break;
         case MODE_MEDIA_CONTROL:
-            haptic_pid.P = HAPTIC_KP_ENDSTOP;
+            haptic_pid.P = HAPTIC_KP_TRACK;
             haptic_pid.D = 0;
             break;
     }
+
+    
 }
 
+
+
 // ─────────────────────────────────────────────────────────────────────────────
-//  Simple getters (all in virtual space)
+//  Simple getters (all in virtual angle space)
 // ─────────────────────────────────────────────────────────────────────────────
 KnobMode motor_get_mode()             { return current_mode; }
 float    motor_get_angle_radians()    { return currentVirtualAngle; }

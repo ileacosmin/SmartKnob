@@ -43,6 +43,14 @@ void display_init() {
     Serial.println("Display Initialized with Flicker-Free Sprite.");
 }
 
+static int getFanSpeedLevelFromAngle(float angleDeg) {
+    float wrapped = fmodf(angleDeg, 360.0f);
+    if (wrapped < 0) wrapped += 360.0f;
+
+    int nearestDetent = ((int)roundf(wrapped / 90.0f)) % 4;
+    return nearestDetent;
+}
+
 void display_update() {
     if (millis() - lastDisplayUpdate > DISPLAY_UPDATE_MS) {
         lastDisplayUpdate = millis();
@@ -128,13 +136,14 @@ void display_update() {
                 sprite.drawString(String((int)percent) + "%", centerX, centerY);
                 break;
             }
-            case MODE_FAN_SPEED: {
-                float constrainedAngle = constrain(angleDeg, 0, 359);
-                int speed_level = round(constrainedAngle / FAN_DETENT_ANGLE);
+           case MODE_FAN_SPEED: {
+                int speed_level = getFanSpeedLevelFromAngle(angleDeg);
+
                 sprite.setTextColor(TFT_GREEN);
                 sprite.drawString(String(speed_level), centerX, centerY);
                 break;
             }
+
             case MODE_TEMPERATURE_CONTROL: {
                  float range_degrees = TEMP_MAX_ANGLE - TEMP_MIN_ANGLE;
                  float range_celsius = TEMP_CELSIUS_MAX - TEMP_CELSIUS_MIN;
@@ -150,16 +159,14 @@ void display_update() {
                 break;
         }
 
-        // --- Step 4: Draw Needle - FIX ---
-        // This condition now correctly includes Brightness, Volume, and Fan modes.
-        // It will draw a needle that follows the live motor position.
         if (currentMode != MODE_TEMPERATURE_CONTROL && currentMode != MODE_LIGHT_COLOR && currentMode != MODE_MEDIA_CONTROL) {
             int radius = 100;
             sprite.drawLine(centerX, centerY, centerX + cos(angleRad) * radius, centerY - sin(angleRad) * radius, TFT_RED);
             sprite.fillCircle(centerX + cos(angleRad) * radius, centerY - sin(angleRad) * radius, 3, TFT_RED);
         }
         
-        // --- Step 5: Push to screen ---
+        // --- Step 4: Push to screen ---
         sprite.pushSprite(0, 0);
     }
 }
+

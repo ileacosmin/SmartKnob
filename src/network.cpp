@@ -64,6 +64,14 @@ void network_publish_media_control(const char* action) {
     }
 }
 
+static int getFanSpeedLevelFromAngle(float angleDeg) {
+    float wrapped = fmodf(angleDeg, 360.0f);
+    if (wrapped < 0) wrapped += 360.0f;
+
+    int nearestDetent = ((int)roundf(wrapped / 90.0f)) % 4;
+    return nearestDetent;
+}
+
 void network_update() {
     if (!client.connected()) {
         reconnect_mqtt();
@@ -95,13 +103,14 @@ void network_update() {
                     break;
                 }
                 case MODE_FAN_SPEED: {
-                     float constrainedAngle = constrain(angleDeg, 0, 270);
-                     int speed_level = round(constrainedAngle / FAN_DETENT_ANGLE);
-                     sprintf(payload, "%d", speed_level);
-                     client.publish(MQTT_TOPIC_FAN_SPEED, payload);
-                     Serial.print("Published Fan Speed: "); Serial.println(payload);
-                     break;
+                    int speed_level = getFanSpeedLevelFromAngle(angleDeg);
+
+                    sprintf(payload, "%d", speed_level);
+                    client.publish(MQTT_TOPIC_FAN_SPEED, payload);
+                    Serial.print("Published Fan Speed: "); Serial.println(payload);
+                    break;
                 }
+
                 case MODE_TEMPERATURE_CONTROL: {
                      float range_degrees = TEMP_MAX_ANGLE - TEMP_MIN_ANGLE;
                      float range_celsius = TEMP_CELSIUS_MAX - TEMP_CELSIUS_MIN;
@@ -130,3 +139,4 @@ void network_update() {
         }
     }
 }
+

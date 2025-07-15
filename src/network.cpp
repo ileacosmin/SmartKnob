@@ -88,7 +88,7 @@ void network_update() {
             switch(motor_get_mode()) {
                 case MODE_LIGHT_BRIGHTNESS: {
                     float displayAngleDeg = constrain(angleDeg, 0, ANALOG_MODE_MAX_ANGLE);
-                    int brightness = map(displayAngleDeg, 0, ANALOG_MODE_MAX_ANGLE, 0, 255);
+                    int brightness = map(displayAngleDeg, 0, ANALOG_MODE_MAX_ANGLE, 0, 100);
                     sprintf(payload, "%d", brightness);
                     client.publish(MQTT_TOPIC_LIGHT_BRIGHTNESS, payload);
                     Serial.print("Published Brightness: "); Serial.println(payload);

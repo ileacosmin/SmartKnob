@@ -198,16 +198,30 @@ void motor_update() {
 
         // ► 360° colour spinner (20° detents)
         case MODE_LIGHT_COLOR: {
-            float wrapped = fmodf(angle_rad, 2 * PI);
-            if (wrapped < 0) wrapped += 2 * PI;
+    float angle_rad = fmodf(currentVirtualAngle, 2 * PI);
+    if (angle_rad < 0) angle_rad += 2 * PI;
 
-            current_attractor_angle = findDetent(wrapped, deg2rad(COLOR_MODE_DETENT_ANGLE));
-            voltage = haptic_pid(current_attractor_angle - wrapped);
+    float angle_deg = rad2deg(angle_rad);
+    float detent_size_deg = 360.0f / COLOR_PALETTE_SIZE;
+    int index = (int)(angle_deg / detent_size_deg + 0.5f) % COLOR_PALETTE_SIZE;
 
-            int spinner_pos = roundf(current_attractor_angle / deg2rad(COLOR_MODE_DETENT_ANGLE));
-            current_color_index = spinner_pos % COLOR_PALETTE_SIZE;
-            break;
-        }
+    current_color_index = index;
+
+    float target_deg = index * detent_size_deg;
+    float target_rad = deg2rad(target_deg);
+
+    float angle_error = target_rad - angle_rad;
+    if (angle_error > PI) angle_error -= 2 * PI;
+    if (angle_error < -PI) angle_error += 2 * PI;
+
+    voltage = haptic_pid(angle_error);
+    current_attractor_angle = target_rad;
+
+    Serial.printf("Angle: %.1f°, Color index: %d\n", angle_deg, current_color_index);
+
+    break;
+}
+
     }
 
     // ── 3) drive motor & remember position ──────────────────────────────────

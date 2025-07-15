@@ -70,7 +70,7 @@ static float clamp_to_mode(KnobMode m, float rad) {
 static float default_memory_for_mode(KnobMode m, float physical_rad) {
     const ModeRange &rng = mode_ranges[m];
     if (!rng.bounded) {
-        // Unbounded => stay where we are (no snapping)
+        // Unbounded => stay where we ar    e (no snapping)
         return physical_rad;
     }
     // Centre of the allowed sector
@@ -97,11 +97,11 @@ void motor_init() {
     motor.init();
     motor.initFOC();
     /* ───────Low pass Filter on the velocity loop─────── */
-    //motor.LPF_velocity.Tf = 0.001f;   // 5 ms time constant (~200 Hz )     
+    motor.LPF_velocity.Tf = 0.02f;        
     /* ────────────────────────────────────────────────── */
 
     /* ───────Low pass Filter on the angle loop─────── */
-    //motor.LPF_angle.Tf = 0.005f;   // 5 ms time constant (~200 Hz )     
+    motor.LPF_angle.Tf = 0.002f;    
     /* ────────────────────────────────────────────────── */
 
     // Fill memory defaults so the first switch into any mode is quiet
